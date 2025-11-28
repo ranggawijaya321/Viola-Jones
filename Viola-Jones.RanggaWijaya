@@ -1,0 +1,169 @@
+# ============================================================
+# REALTIME WEBCAM - Viola–Jones + Save Label + Save Face 50x50
+# Google Colab Compatible - 2025
+# ============================================================
+
+!pip install -q opencv-python-headless
+
+import cv2
+import numpy as np
+import base64
+import matplotlib.pyplot as plt
+from IPython.display import HTML, display, clear_output
+from google.colab import output
+import os
+import json
+from datetime import datetime
+
+# ====== Buat folder dataset ======
+if not os.path.exists("dataset"):
+    os.mkdir("dataset")
+
+label_file = "labels.json"
+
+# Jika belum ada file JSON, buat file kosong
+if not os.path.exists(label_file):
+    with open(label_file, "w") as f:
+        json.dump({}, f)
+
+# ====== Load Haarcascade ======
+haarcascade = "haarcascade_frontalface_default.xml"
+if not os.path.exists(haarcascade):
+    !wget -q https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/haarcascade_frontalface_default.xml -O haarcascade_frontalface_default.xml
+
+face_detector = cv2.CascadeClassifier(haarcascade)
+
+
+# ====== HTML ======
+html = """
+<style>
+#video {
+    border: 3px solid black;
+    margin-top: 10px;
+}
+button {
+    padding: 10px;
+    margin: 5px;
+    font-size: 14px;
+}
+input {
+    padding: 5px;
+}
+</style>
+
+Nama orang / label: <input id='labelbox' type='text' placeholder='Masukkan nama'>
+<br>
+
+<video id="video" autoplay playsinline width="480"></video><br>
+<button onclick="capturePhoto()">📸 Capture</button>
+<button onclick="stopCam()">⏹ Stop Camera</button>
+
+<script>
+let stream;
+
+async function startCam(){
+    stream = await navigator.mediaDevices.getUserMedia({video: true});
+    document.getElementById('video').srcObject = stream;
+}
+
+function stopCam(){
+    if(stream){
+        stream.getTracks().forEach(t => t.stop());
+    }
+}
+
+function capturePhoto(){
+    const video = document.getElementById("video");
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(video, 0, 0);
+
+    const label = document.getElementById("labelbox").value;
+
+    google.colab.kernel.invokeFunction(
+        'process_frame',
+        [canvas.toDataURL("image/jpeg", 0.9), label],
+        {}
+    );
+}
+
+startCam();
+</script>
+"""
+
+display(HTML(html))
+
+
+# ============================================================
+# PYTHON CALLBACK
+# ============================================================
+def process_frame(data_url, label):
+
+    # Membaca label
+    if label.strip() == "":
+        label = "unknown"
+
+    # Muat file JSON
+    with open(label_file, "r") as f:
+        labels = json.load(f)
+
+    # Tambah label baru jika belum ada
+    if label not in labels:
+        labels[label] = 0
+
+    # Konversi base64 → gambar
+    header, encoded = data_url.split(",", 1)
+    img_bytes = base64.b64decode(encoded)
+
+    img_arr = np.frombuffer(img_bytes, np.uint8)
+    img = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # Deteksi wajah
+    faces = face_detector.detectMultiScale(gray, 1.2, 5)
+
+    # ====== Status Deteksi ======
+    if len(faces) == 0:
+        status_html = "<h3 style='color:red'>❌ Wajah Tidak Terdeteksi</h3>"
+    else:
+        status_html = "<h3 style='color:green'>✔ Wajah Terdeteksi</h3>"
+
+        for (x, y, w, h) in faces:
+            # Kotak hijau
+            cv2.rectangle(img, (x, y), (x+w, y+h), (0,255,0), 2)
+
+            # Crop wajah
+            face_crop = gray[y:y+h, x:x+w]
+
+            # Resize 50x50
+            face_resized = cv2.resize(face_crop, (50, 50))
+
+            # Simpan sebagai file dataset
+            filename = f"dataset/{label}_{labels[label]}.jpg"
+            cv2.imwrite(filename, face_resized)
+
+            # Update jumlah gambar label tsb
+            labels[label] += 1
+
+    # Simpan update label JSON
+    with open(label_file, "w") as f:
+        json.dump(labels, f, indent=4)
+
+    # ====== Tampilkan ======
+    clear_output(wait=True)
+    display(HTML(status_html))
+
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    plt.figure(figsize=(8,6))
+    plt.imshow(img_rgb)
+    plt.axis('off')
+    plt.show()
+
+
+# Daftar callback
+output.register_callback('process_frame', process_frame)
+
+print("📸 Siap! Masukkan nama → Klik 'Capture'") 
